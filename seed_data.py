@@ -1,6 +1,7 @@
 import sys
 import os
-from datetime import date, datetime
+import json
+from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -14,13 +15,15 @@ from app.models import (
     ViolationClue, ClueType, ClueStatus, CluePriority,
     InspectionRecord,
     ComplianceScore, SupervisionPlan, ComplianceGrade,
-    ScoreItem, InspectionFrequency, PlanStatus
+    ScoreItem, InspectionFrequency, PlanStatus,
+    Inspector, RuleVersion, TaskEventAction
 )
 
 from app.routers.compliance_score import (
     calculate_compliance_score, save_compliance_score,
     generate_inspection_plans
 )
+from app.scheduling import generate_tasks, DEFAULT_RULES
 
 
 def seed_data():
@@ -733,6 +736,34 @@ def seed_data():
         print(f"\n已生成 {len(compliance_scores)} 条机构合规评分记录")
         print(f"已生成 {supervision_plans_count} 条监管检查计划")
 
+        print("\n开始生成检查任务调度种子数据...")
+        inspectors = [
+            Inspector(name="稽查员王建国", daily_capacity=2),
+            Inspector(name="稽查员李明", daily_capacity=2),
+            Inspector(name="稽查员张华", daily_capacity=1),
+        ]
+        for insp in inspectors:
+            db.add(insp)
+        db.flush()
+        print(f"已创建 {len(inspectors)} 名执法人员（含每日容量约束）")
+
+        rule_version = RuleVersion(
+            version_code="v2026-专项整治",
+            name="专项整治检查频率规则（第一版）",
+            rules=json.dumps(DEFAULT_RULES, ensure_ascii=False),
+            is_active=True,
+            remark="专项整治期间启用：A级每24个月、B级每12个月、C级每6个月、D级每3个月检查一次"
+        )
+        db.add(rule_version)
+        db.flush()
+        print(f"已创建频率规则版本: {rule_version.version_code}")
+
+        today = date.today()
+        task_decisions, _ = generate_tasks(db, today, today + timedelta(days=92))
+        created_count = sum(1 for d in task_decisions if d["action"] == TaskEventAction.CREATED)
+        gap_count = sum(1 for d in task_decisions if d["action"] == TaskEventAction.GAP)
+        print(f"已生成 {created_count} 个检查任务（固定评分依据与规则版本），待排期缺口 {gap_count} 个")
+
         db.commit()
         print("\n数据初始化完成！")
         print(f"  机构数量: {len(db_institutions)}")
@@ -743,6 +774,8 @@ def seed_data():
         print(f"  核查记录: {len(inspections)}")
         print(f"  合规评分记录: {len(compliance_scores)}")
         print(f"  监管检查计划: {supervision_plans_count}")
+        print(f"  执法人员: {len(inspectors)}")
+        print(f"  检查任务: {created_count} (待排期缺口: {gap_count})")
         print("\n机构合规评分详情:")
         grade_names = {
             ComplianceGrade.EXCELLENT: "优秀(A)",

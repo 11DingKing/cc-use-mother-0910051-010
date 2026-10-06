@@ -87,6 +87,72 @@ class PlanStatus(str, enum.Enum):
     CANCELLED = "已取消"
 
 
+class TaskStatus(str, enum.Enum):
+    PENDING_ASSIGNMENT = "待排期"
+    SCHEDULED = "已排期"
+    IN_PROGRESS = "进行中"
+    COMPLETED = "已完成"
+    CANCELLED = "已取消"
+
+
+class TaskKind(str, enum.Enum):
+    REGULAR = "常规检查"
+    FOLLOW_UP = "复查"
+
+
+class TaskEventAction(str, enum.Enum):
+    CREATED = "新建"
+    KEPT = "保留"
+    RESCHEDULED = "重排"
+    CANCELLED = "取消"
+    GAP = "缺口"
+    PRIORITY_CHANGED = "优先级调整"
+    COMPLETED = "完成"
+    SKIPPED = "跳过"
+
+
+class ReplanTrigger(str, enum.Enum):
+    GENERATION = "计划生成"
+    DELAY = "延期"
+    CLOSURE = "机构停业"
+    RISK_SURGE = "风险突升"
+    RESULT_WRITEBACK = "结果回写"
+    MANUAL_REPLAN = "批量重排"
+
+
+class TaskStatus(str, enum.Enum):
+    PENDING_ASSIGNMENT = "待排期"
+    SCHEDULED = "已排期"
+    IN_PROGRESS = "进行中"
+    COMPLETED = "已完成"
+    CANCELLED = "已取消"
+
+
+class TaskKind(str, enum.Enum):
+    REGULAR = "常规检查"
+    FOLLOW_UP = "复查"
+
+
+class TaskEventAction(str, enum.Enum):
+    CREATED = "新建"
+    KEPT = "保留"
+    RESCHEDULED = "重排"
+    CANCELLED = "取消"
+    GAP = "缺口"
+    PRIORITY_CHANGED = "优先级调整"
+    COMPLETED = "完成"
+    SKIPPED = "跳过"
+
+
+class ReplanTrigger(str, enum.Enum):
+    GENERATION = "计划生成"
+    DELAY = "延期"
+    CLOSURE = "机构停业"
+    RISK_SURGE = "风险突升"
+    RESULT_WRITEBACK = "结果回写"
+    MANUAL_REPLAN = "批量重排"
+
+
 class Institution(Base):
     __tablename__ = "institutions"
 
@@ -99,6 +165,7 @@ class Institution(Base):
     phone = Column(String(50))
     registration_date = Column(Date)
     business_scope = Column(Text)
+    operating_status = Column(String(20), default="正常营业")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -109,6 +176,7 @@ class Institution(Base):
     clues = relationship("ViolationClue", back_populates="institution")
     compliance_scores = relationship("ComplianceScore", back_populates="institution", cascade="all, delete-orphan")
     supervision_plans = relationship("SupervisionPlan", back_populates="institution", cascade="all, delete-orphan")
+    inspection_tasks = relationship("InspectionTask", back_populates="institution", cascade="all, delete-orphan")
 
 
 class InstitutionLicense(Base):
@@ -312,3 +380,92 @@ class SupervisionPlan(Base):
 
     compliance_score = relationship("ComplianceScore", back_populates="supervision_plans")
     institution = relationship("Institution", back_populates="supervision_plans")
+
+
+class RuleVersion(Base):
+    """检查频率规则版本。
+
+    任务生成时固定引用某个版本，之后规则调整不会改写已生成任务的依据。
+    同一时刻最多一个启用版本。
+    """
+    __tablename__ = "rule_versions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    version_code = Column(String(50), unique=True, nullable=False, index=True)
+    name = Column(String(200), nullable=False)
+    rules = Column(Text, nullable=False)
+    is_active = Column(Boolean, default=False)
+    remark = Column(String(500))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    inspection_tasks = relationship("InspectionTask", back_populates="rule_version")
+
+
+class Inspector(Base):
+    """执法人员，带每日检查容量约束。"""
+    __tablename__ = "inspectors"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), unique=True, nullable=False, index=True)
+    daily_capacity = Column(Integer, nullable=False, default=2)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    inspection_tasks = relationship("InspectionTask", back_populates="inspector")
+
+
+class InspectionTask(Base):
+    """有容量约束的检查任务。
+
+    生成时固定评分依据（compliance_score_id）与频率规则版本（rule_version_id）；
+    进行中/已完成/已取消的任务冻结，任何重排都不会改写。
+    """
+    __tablename__ = "inspection_tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_no = Column(String(50), unique=True, index=True)
+    institution_id = Column(Integer, ForeignKey("institutions.id"), nullable=False, index=True)
+    compliance_score_id = Column(Integer, ForeignKey("compliance_scores.id"), nullable=False)
+    rule_version_id = Column(Integer, ForeignKey("rule_versions.id"), nullable=False)
+    task_kind = Column(Enum(TaskKind), default=TaskKind.REGULAR, nullable=False)
+    round_no = Column(Integer, default=1)
+    priority = Column(Enum(CluePriority), default=CluePriority.MEDIUM, nullable=False)
+    priority_reason = Column(Text)
+    due_date = Column(Date)
+    scheduled_date = Column(Date)
+    inspector_id = Column(Integer, ForeignKey("inspectors.id"))
+    status = Column(Enum(TaskStatus), default=TaskStatus.PENDING_ASSIGNMENT, nullable=False, index=True)
+    unschedulable_reason = Column(String(500))
+    result = Column(Text)
+    actual_date = Column(Date)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    institution = relationship("Institution", back_populates="inspection_tasks")
+    compliance_score = relationship("ComplianceScore")
+    rule_version = relationship("RuleVersion", back_populates="inspection_tasks")
+    inspector = relationship("Inspector", back_populates="inspection_tasks")
+    events = relationship("TaskEvent", back_populates="task", cascade="all, delete-orphan",
+                          order_by="TaskEvent.id")
+
+
+class TaskEvent(Base):
+    """任务调整留痕：每次生成/重排对任务的保留、取消、重排、缺口等决策及原因。"""
+    __tablename__ = "task_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("inspection_tasks.id"), nullable=False, index=True)
+    trigger = Column(Enum(ReplanTrigger), nullable=False)
+    action = Column(Enum(TaskEventAction), nullable=False)
+    reason = Column(Text)
+    old_scheduled_date = Column(Date)
+    new_scheduled_date = Column(Date)
+    old_inspector_id = Column(Integer)
+    new_inspector_id = Column(Integer)
+    old_priority = Column(Enum(CluePriority))
+    new_priority = Column(Enum(CluePriority))
+    old_score_id = Column(Integer)
+    new_score_id = Column(Integer)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    task = relationship("InspectionTask", back_populates="events")

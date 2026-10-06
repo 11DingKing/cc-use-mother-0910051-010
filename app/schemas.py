@@ -1,10 +1,11 @@
 from pydantic import BaseModel, Field
 from datetime import date, datetime
-from typing import Optional, List
+from typing import Optional, List, Dict
 from .models import (
     InstitutionType, ProcedureCategory, SurgeryLevel,
     QualificationType, ClueType, ClueStatus, CluePriority,
-    ComplianceGrade, ScoreItem, InspectionFrequency, PlanStatus
+    ComplianceGrade, ScoreItem, InspectionFrequency, PlanStatus,
+    TaskStatus, TaskKind, TaskEventAction, ReplanTrigger
 )
 
 
@@ -17,6 +18,7 @@ class InstitutionBase(BaseModel):
     phone: Optional[str] = None
     registration_date: Optional[date] = None
     business_scope: Optional[str] = None
+    operating_status: str = "正常营业"
 
 
 class InstitutionCreate(InstitutionBase):
@@ -32,6 +34,7 @@ class InstitutionUpdate(BaseModel):
     phone: Optional[str] = None
     registration_date: Optional[date] = None
     business_scope: Optional[str] = None
+    operating_status: Optional[str] = None
 
 
 class Institution(InstitutionBase):
@@ -482,3 +485,186 @@ class ComplianceGradeDistribution(BaseModel):
     count: int
     percentage: float
     score_range: str
+
+
+# ============ 检查任务调度 ============
+
+
+class GradeRuleConfig(BaseModel):
+    frequency_months: int = Field(..., ge=1, le=60, description="检查频率（月）")
+    priority: CluePriority = Field(..., description="该等级对应的任务优先级")
+
+
+class RuleVersionCreate(BaseModel):
+    version_code: str = Field(..., min_length=1, max_length=50)
+    name: str = Field(..., min_length=1, max_length=200)
+    rules: Dict[str, GradeRuleConfig] = Field(..., description="按合规等级 A/B/C/D 配置的频率与优先级规则")
+    activate: bool = Field(True, description="是否设为当前启用版本")
+    remark: Optional[str] = None
+
+
+class RuleVersionOut(BaseModel):
+    id: int
+    version_code: str
+    name: str
+    rules: Dict[str, GradeRuleConfig]
+    is_active: bool
+    remark: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class InspectorCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    daily_capacity: int = Field(2, ge=1, le=20, description="每日最多可执行的检查任务数")
+
+
+class InspectorUpdate(BaseModel):
+    daily_capacity: Optional[int] = Field(None, ge=1, le=20)
+    is_active: Optional[bool] = None
+
+
+class InspectorOut(BaseModel):
+    id: int
+    name: str
+    daily_capacity: int
+    is_active: bool
+    active_task_count: int = 0
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class TaskGenerateRequest(BaseModel):
+    period_start: date = Field(..., description="排期窗口开始日期")
+    period_end: date = Field(..., description="排期窗口结束日期")
+    institution_id: Optional[int] = Field(None, description="只为指定机构生成，为空则全部机构")
+    rule_version_id: Optional[int] = Field(None, description="指定规则版本，为空则使用当前启用版本")
+
+
+class TaskDelayRequest(BaseModel):
+    new_date: Optional[date] = Field(None, description="延期到的指定日期，为空则由系统寻找下一个可用档期")
+    reason: Optional[str] = None
+    window_start: Optional[date] = None
+    window_end: Optional[date] = None
+
+
+class InstitutionClosureRequest(BaseModel):
+    closed: bool = Field(True, description="True 为停业，False 为恢复营业")
+    reason: Optional[str] = None
+    window_start: Optional[date] = None
+    window_end: Optional[date] = None
+
+
+class RiskSurgeRequest(BaseModel):
+    new_score_id: Optional[int] = Field(None, description="已有的新评分记录ID，为空则重新计算评分")
+    reason: Optional[str] = None
+    window_start: Optional[date] = None
+    window_end: Optional[date] = None
+
+
+class ResultWritebackRequest(BaseModel):
+    result: str = Field(..., min_length=1, description="检查结果内容")
+    passed: bool = Field(..., description="检查是否合格，不合格将自动生成复查任务")
+    actual_date: Optional[date] = Field(None, description="实际检查日期，默认为当天")
+    window_start: Optional[date] = None
+    window_end: Optional[date] = None
+
+
+class ReplanRequest(BaseModel):
+    window_start: date
+    window_end: date
+    reason: Optional[str] = None
+
+
+class TaskDecision(BaseModel):
+    """一次生成/重排中对单个任务的处置决策及原因。"""
+    task_id: Optional[int] = None
+    task_no: Optional[str] = None
+    institution_id: int
+    institution_name: str
+    action: TaskEventAction
+    reason: str
+    old_scheduled_date: Optional[date] = None
+    new_scheduled_date: Optional[date] = None
+    old_inspector_id: Optional[int] = None
+    new_inspector_id: Optional[int] = None
+    old_priority: Optional[CluePriority] = None
+    new_priority: Optional[CluePriority] = None
+
+
+class ReplanResult(BaseModel):
+    trigger: ReplanTrigger
+    window_start: date
+    window_end: date
+    total_decisions: int
+    kept_count: int
+    rescheduled_count: int
+    cancelled_count: int
+    gap_count: int
+    created_count: int
+    decisions: List[TaskDecision]
+
+
+class TaskGenerationResult(BaseModel):
+    rule_version_id: int
+    version_code: str
+    period_start: date
+    period_end: date
+    created_count: int
+    gap_count: int
+    decisions: List[TaskDecision]
+
+
+class InspectionTaskOut(BaseModel):
+    id: int
+    task_no: Optional[str] = None
+    institution_id: int
+    institution_name: Optional[str] = None
+    compliance_score_id: int
+    rule_version_id: int
+    version_code: Optional[str] = None
+    task_kind: TaskKind
+    round_no: int
+    priority: CluePriority
+    priority_reason: Optional[str] = None
+    due_date: Optional[date] = None
+    scheduled_date: Optional[date] = None
+    inspector_id: Optional[int] = None
+    inspector_name: Optional[str] = None
+    status: TaskStatus
+    unschedulable_reason: Optional[str] = None
+    result: Optional[str] = None
+    actual_date: Optional[date] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class TaskEventOut(BaseModel):
+    id: int
+    task_id: int
+    trigger: ReplanTrigger
+    action: TaskEventAction
+    reason: Optional[str] = None
+    old_scheduled_date: Optional[date] = None
+    new_scheduled_date: Optional[date] = None
+    old_inspector_id: Optional[int] = None
+    new_inspector_id: Optional[int] = None
+    old_priority: Optional[CluePriority] = None
+    new_priority: Optional[CluePriority] = None
+    old_score_id: Optional[int] = None
+    new_score_id: Optional[int] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class InspectionTaskDetail(InspectionTaskOut):
+    events: List[TaskEventOut] = []

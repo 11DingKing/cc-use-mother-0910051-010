@@ -247,7 +247,8 @@ def calculate_compliance_score(
 
 
 def save_compliance_score(
-    result: schemas.ScoreCalculationResult, db: Session, remark: Optional[str] = None
+    result: schemas.ScoreCalculationResult, db: Session,
+    remark: Optional[str] = None, commit: bool = True
 ) -> ComplianceScore:
     scores_map = {}
     for d in result.deductions:
@@ -283,7 +284,11 @@ def save_compliance_score(
     )
 
     db.add(score_record)
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        # 供调度等复合事务复用：只 flush，由外层统一提交/回滚
+        db.flush()
     db.refresh(score_record)
     return score_record
 

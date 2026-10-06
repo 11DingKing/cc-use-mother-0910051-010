@@ -264,6 +264,42 @@ def test_supervision_plans():
         print(f"✓ 为评分记录生成计划正常，生成 {data['plans_created']} 个计划")
 
 
+def test_scheduling():
+    response = client.get("/api/scheduling/rule-versions")
+    assert response.status_code == 200
+    versions = response.json()
+    assert any(v["is_active"] for v in versions)
+    print(f"✓ 规则版本列表接口正常，共 {len(versions)} 个版本")
+
+    response = client.get("/api/scheduling/inspectors")
+    assert response.status_code == 200
+    inspectors = response.json()
+    assert len(inspectors) >= 1
+    for i in inspectors:
+        print(f"    - {i['name']}: 日容量 {i['daily_capacity']}, 活动任务 {i['active_task_count']}")
+
+    response = client.get("/api/scheduling/tasks")
+    assert response.status_code == 200
+    tasks = response.json()
+    print(f"✓ 检查任务列表接口正常，共 {len(tasks)} 个任务")
+    for t in tasks[:3]:
+        print(f"    - {t['task_no']}: {t['institution_name']}, {t['scheduled_date']}, "
+              f"优先级: {t['priority']}, 状态: {t['status']}, 规则版本: {t['version_code']}")
+    if tasks:
+        detail = client.get(f"/api/scheduling/tasks/{tasks[0]['id']}")
+        assert detail.status_code == 200
+        assert detail.json()["compliance_score_id"] is not None
+        print("✓ 检查任务详情接口正常（含固定评分依据与调整留痕）")
+
+    response = client.get("/api/scheduling/tasks/gaps")
+    assert response.status_code == 200
+    print(f"✓ 待排期缺口接口正常，共 {len(response.json())} 个缺口")
+
+    response = client.get("/api/scheduling/events")
+    assert response.status_code == 200
+    print(f"✓ 任务调整留痕接口正常，共 {len(response.json())} 条")
+
+
 def run_all_tests():
     print("=" * 60)
     print("医美合规核验系统 - API功能测试")
@@ -279,6 +315,7 @@ def run_all_tests():
         test_stats,
         test_compliance_score,
         test_supervision_plans,
+        test_scheduling,
     ]
 
     passed = 0

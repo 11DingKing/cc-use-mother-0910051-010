@@ -4,14 +4,32 @@ from fastapi.middleware.cors import CORSMiddleware
 from .database import engine, Base
 from .routers import (
     institutions, practitioners, procedures,
-    compliance, clues, stats, compliance_score
+    compliance, clues, stats, compliance_score, scheduling
 )
 
 Base.metadata.create_all(bind=engine)
 
+
+def _ensure_legacy_columns():
+    """为未重建的旧库补充新增列（新库由 create_all 建全，无需变更）。"""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if "institutions" in inspector.get_table_names():
+        columns = {c["name"] for c in inspector.get_columns("institutions")}
+        if "operating_status" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE institutions ADD COLUMN operating_status "
+                    "VARCHAR(20) DEFAULT '正常营业'"
+                ))
+
+
+_ensure_legacy_columns()
+
 app = FastAPI(
     title="医美合规核验系统 API",
-    description="医美机构和从业人员合规核验、项目分级管理、违规线索登记与核查、统计分析",
+    description="医美机构和从业人员合规核验、项目分级管理、违规线索登记与核查、统计分析、检查任务调度",
     version="1.0.0"
 )
 
@@ -30,6 +48,7 @@ app.include_router(compliance.router, prefix="/api/compliance", tags=["合规核
 app.include_router(clues.router, prefix="/api/clues", tags=["违规线索管理"])
 app.include_router(stats.router, prefix="/api/stats", tags=["统计分析"])
 app.include_router(compliance_score.router, prefix="/api/compliance-score", tags=["机构合规评分与监管计划"])
+app.include_router(scheduling.router, prefix="/api/scheduling", tags=["检查任务调度"])
 
 
 @app.get("/api/health", tags=["系统"])
