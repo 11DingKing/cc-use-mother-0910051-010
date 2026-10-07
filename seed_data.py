@@ -21,6 +21,8 @@ from app.routers.compliance_score import (
     calculate_compliance_score, save_compliance_score,
     generate_inspection_plans
 )
+from app.models import Inspector as InspectorModel
+from app import task_service
 
 
 def seed_data():
@@ -732,6 +734,19 @@ def seed_data():
 
         print(f"\n已生成 {len(compliance_scores)} 条机构合规评分记录")
         print(f"已生成 {supervision_plans_count} 条监管检查计划")
+
+        print("\n开始配置执法人员并生成容量约束检查任务...")
+        inspector_names = ["稽查员王建国", "稽查员李慧敏", "稽查员张伟"]
+        for name in inspector_names:
+            db.add(InspectorModel(name=name, daily_capacity=2))
+        db.flush()
+        plan_result = task_service.generate_quarterly_plan(
+            db, start_date=date(2024, 1, 1), commit=False
+        )
+        print(f"  规则版本: {plan_result['rule_version_code']}, 批次: {plan_result['batch_id']}")
+        print(f"  已创建 {plan_result['tasks_created']} 个检查任务，"
+              f"成功排期 {plan_result['tasks_scheduled']} 个，"
+              f"容量缺口 {len(plan_result['gaps'])} 个")
 
         db.commit()
         print("\n数据初始化完成！")
